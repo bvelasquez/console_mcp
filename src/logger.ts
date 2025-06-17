@@ -1,58 +1,51 @@
 #!/usr/bin/env node
 
-import { spawn } from "child_process";
-import { promises as fs } from "fs";
+import { spawn, ChildProcess } from "child_process";
+import { LogDatabase, LogEntry } from "./database.js";
 import * as path from "path";
-import { createWriteStream } from "fs";
-
-interface LogEntry {
-  timestamp: string;
-  level: string;
-  message: string;
-  process: string;
-  command?: string;
-  pid?: number;
-  source: "stdout" | "stderr";
-}
+import * as os from "os";
 
 class ConsoleLogger {
-  private logDirectory: string;
+  private db: LogDatabase;
   private processName: string;
   private command: string[];
-  private logStream?: NodeJS.WritableStream;
+  private processId?: number;
+  private childProcess?: ChildProcess;
 
   constructor(processName: string, command: string[], logDirectory?: string) {
     this.processName = processName;
     this.command = command;
-    this.logDirectory =
+
+    const defaultLogDir =
       logDirectory ||
       process.env.CONSOLE_LOG_DIR ||
-      "/Users/barryvelasquez/logs";
+      path.join(os.homedir(), ".console-logs");
+
+    this.db = new LogDatabase(defaultLogDir);
   }
 
-  private async ensureLogDirectory(): Promise<void> {
-    try {
-      await fs.access(this.logDirectory);
-    } catch {
-      await fs.mkdir(this.logDirectory, { recursive: true });
-    }
-  }
-
-  private async initLogStream(): Promise<void> {
-    await this.ensureLogDirectory();
-    const logFile = path.join(this.logDirectory, `${this.processName}.json`);
-    this.logStream = createWriteStream(logFile, { flags: "a" });
-  }
-
-  private writeLogEntry(
+  private addLogEntry(
+    level: LogEntry["level"],
     message: string,
-    source: "stdout" | "stderr",
-    level?: string,
-  ): void {
-    if (!this.logStream) return;
+    rawOutput: string,
+    source: LogEntry["source"],
+  ) {
+    if (!this.processId) return;
 
-    // Determine log level based on content if not specified
-    let detectedLevel = level || "info";
+    this.db.addLogEntry({
+      process_id: this.processId,
+      timestamp: new Date().toISOString(),
+      level,
+      message: message.trim(),
+      raw_output: rawOutput,
+      source,
+    });
+  }
+
+  private detectLogLevel(
+    message: string,
+    source: LogEntry["source"],
+  ): LogEntry["level"] {
     const lowerMessage = message.toLowerCase();
 
     if (
@@ -60,55 +53,52 @@ class ConsoleLogger {
       lowerMessage.includes("error") ||
       lowerMessage.includes("fail")
     ) {
-      detectedLevel = "error";
+      return "error";
     } else if (lowerMessage.includes("warn")) {
-      detectedLevel = "warn";
+      return "warn";
     } else if (lowerMessage.includes("debug")) {
-      detectedLevel = "debug";
+      return "debug";
     }
 
-    const logEntry: LogEntry = {
-      timestamp: new Date().toISOString(),
-      level: detectedLevel,
-      message: message.trim(),
-      process: this.processName,
-      command: this.command.join(" "),
-      pid: process.pid,
-      source,
-    };
-
-    this.logStream.write(JSON.stringify(logEntry) + "\n");
+    return "info";
   }
 
   async start(): Promise<void> {
-    await this.initLogStream();
-
     console.log(
       `🚀 Starting process "${this.processName}": ${this.command.join(" ")}`,
     );
-    console.log(
-      `📝 Logging to: ${path.join(
-        this.logDirectory,
-        this.processName + ".json",
-      )}`,
-    );
+    console.log(`📝 Logging to SQLite database in: ${this.db["db"].name}`);
     console.log("=====================================\n");
 
     const [command, ...args] = this.command;
-    const childProcess = spawn(command, args, {
+    this.childProcess = spawn(command, args, {
       stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env },
     });
 
+    // Create process record in database
+    this.processId = this.db.createProcess({
+      name: this.processName,
+      command: this.command.join(" "),
+      start_time: new Date().toISOString(),
+      status: "running",
+      pid: this.childProcess.pid,
+    });
+
     // Log process start
-    this.writeLogEntry(
-      `Process started: ${this.command.join(" ")} (PID: ${childProcess.pid})`,
-      "stdout",
+    this.addLogEntry(
       "info",
+      `Process started: ${this.command.join(" ")} (PID: ${
+        this.childProcess.pid
+      })`,
+      `Process started: ${this.command.join(" ")} (PID: ${
+        this.childProcess.pid
+      })`,
+      "stdout",
     );
 
     // Handle stdout
-    childProcess.stdout?.on("data", (data: Buffer) => {
+    this.childProcess.stdout?.on("data", (data: Buffer) => {
       const output = data.toString();
 
       // Write to console (so user can see output)
@@ -117,12 +107,13 @@ class ConsoleLogger {
       // Split into lines and log each one
       const lines = output.split("\n").filter((line) => line.trim());
       lines.forEach((line) => {
-        this.writeLogEntry(line, "stdout");
+        const level = this.detectLogLevel(line, "stdout");
+        this.addLogEntry(level, line, output, "stdout");
       });
     });
 
     // Handle stderr
-    childProcess.stderr?.on("data", (data: Buffer) => {
+    this.childProcess.stderr?.on("data", (data: Buffer) => {
       const output = data.toString();
 
       // Write to console (so user can see output)
@@ -131,61 +122,128 @@ class ConsoleLogger {
       // Split into lines and log each one
       const lines = output.split("\n").filter((line) => line.trim());
       lines.forEach((line) => {
-        this.writeLogEntry(line, "stderr");
+        const level = this.detectLogLevel(line, "stderr");
+        this.addLogEntry(level, line, output, "stderr");
       });
     });
 
     // Handle process exit
-    childProcess.on("exit", (code, signal) => {
+    this.childProcess.on("exit", (code, signal) => {
       const exitMessage = `Process exited with code ${code}${
         signal ? ` (signal: ${signal})` : ""
       }`;
       console.log(`\n🏁 ${exitMessage}`);
-      this.writeLogEntry(exitMessage, "stdout", code === 0 ? "info" : "error");
 
-      if (this.logStream) {
-        (this.logStream as any).end();
+      const level = code === 0 ? "info" : "error";
+      this.addLogEntry(level, exitMessage, exitMessage, "stdout");
+
+      // Update process status in database
+      if (this.processId) {
+        const status = code === 0 ? "completed" : "failed";
+        this.db.updateProcessStatus(
+          this.processId,
+          status,
+          code || undefined,
+          new Date().toISOString(),
+        );
       }
 
+      this.db.close();
       process.exit(code || 0);
     });
 
     // Handle process errors
-    childProcess.on("error", (error) => {
+    this.childProcess.on("error", (error) => {
       const errorMessage = `Process error: ${error.message}`;
       console.error(`❌ ${errorMessage}`);
-      this.writeLogEntry(errorMessage, "stderr", "error");
+      this.addLogEntry(
+        "error",
+        errorMessage,
+        error.stack || error.message,
+        "stderr",
+      );
 
-      if (this.logStream) {
-        (this.logStream as any).end();
+      // Update process status in database
+      if (this.processId) {
+        this.db.updateProcessStatus(
+          this.processId,
+          "failed",
+          -1,
+          new Date().toISOString(),
+        );
       }
 
+      this.db.close();
       process.exit(1);
     });
 
     // Handle SIGINT (Ctrl+C) to gracefully shutdown
     process.on("SIGINT", () => {
       console.log("\n🛑 Received SIGINT, terminating process...");
-      this.writeLogEntry(
+      this.addLogEntry(
+        "info",
+        "Process terminated by user (SIGINT)",
         "Process terminated by user (SIGINT)",
         "stdout",
-        "info",
       );
-      childProcess.kill("SIGINT");
+
+      if (this.processId) {
+        this.db.updateProcessStatus(
+          this.processId,
+          "failed",
+          -1,
+          new Date().toISOString(),
+        );
+      }
+
+      this.childProcess?.kill("SIGINT");
     });
 
     // Handle SIGTERM
     process.on("SIGTERM", () => {
       console.log("\n🛑 Received SIGTERM, terminating process...");
-      this.writeLogEntry("Process terminated (SIGTERM)", "stdout", "info");
-      childProcess.kill("SIGTERM");
+      this.addLogEntry(
+        "info",
+        "Process terminated (SIGTERM)",
+        "Process terminated (SIGTERM)",
+        "stdout",
+      );
+
+      if (this.processId) {
+        this.db.updateProcessStatus(
+          this.processId,
+          "failed",
+          -1,
+          new Date().toISOString(),
+        );
+      }
+
+      this.childProcess?.kill("SIGTERM");
     });
+  }
+
+  stopProcess(): boolean {
+    if (!this.childProcess) {
+      return false;
+    }
+
+    this.childProcess.kill();
+    return true;
+  }
+
+  getDatabase(): LogDatabase {
+    return this.db;
+  }
+
+  close() {
+    this.childProcess?.kill();
+    this.db.close();
   }
 }
 
 function printUsage() {
   console.log(`
-Console Logger - Capture and log console output to JSON files
+Console Logger - Capture and log console output to SQLite database
 
 Usage:
   console-logger <process-name> <command> [args...]
@@ -197,13 +255,13 @@ Examples:
   console-logger "docker-container" docker logs -f container-name
 
 Environment Variables:
-  CONSOLE_LOG_DIR - Directory to store log files (default: /Users/barryvelasquez/logs)
+  CONSOLE_LOG_DIR - Directory to store log database (default: ~/.console-logs)
 
 The logger will:
 1. Start your command and display output in the console
-2. Simultaneously log all output to JSON files in the log directory
+2. Simultaneously log all output to a SQLite database
 3. Each log entry includes timestamp, level, source (stdout/stderr), and metadata
-4. The MCP server can then search and analyze these logs
+4. The MCP server can then search and analyze these logs with fast SQL queries
 `);
 }
 

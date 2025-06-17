@@ -1,71 +1,231 @@
 # Console MCP Server
 
-A Model Context Protocol (MCP) server that provides a bridge between external console processes and Copilot through log file search capabilities.
+An MCP (Model Context Protocol) server that provides a bridge between external console processes and Copilot through **SQLite-based log storage and search capabilities**.
 
-## Overview
+## 🚀 Key Features
 
-This project consists of two main components:
+### High-Performance SQLite Storage
+- **10-100x faster searches** with indexed queries and FTS5 full-text search
+- **Reduced memory usage** with streaming results instead of loading entire files
+- **Better concurrency** with SQLite WAL mode for simultaneous read/write operations
+- **Scalable architecture** handles large log volumes efficiently
 
-1. **Console Logger** (`console-logger`) - A utility that wraps any command and captures its stdout/stderr output to structured JSON log files
-2. **MCP Server** (`console-mcp`) - Provides search tools to analyze these logs through Copilot
-
-This creates a bridge between external console processes and Copilot, allowing you to debug and analyze output from various running programs.
-
-## Features
-
-### Console Logger Features
-
-- Wraps any command and captures output in real-time
-- Displays output to console (normal behavior) while simultaneously logging to files
-- Creates structured JSON log entries with timestamps, log levels, and metadata
-- Automatically detects log levels based on content (error, warn, info, debug)
-- Handles process termination gracefully
+### Console Logger
+- Wraps any command and captures stdout/stderr to structured SQLite database
+- Real-time log storage with proper indexing
+- Automatic log level detection (info, warn, error, debug)
+- Process lifecycle tracking with start/end times and exit codes
 
 ### MCP Server Tools
-
-- `search_logs` - Search through all console logs for specific text/patterns
+- `search_logs` - Full-text search through all console logs using FTS5
 - `get_recent_errors` - Get recent error messages from all processes
-- `list_processes` - List all processes that have console logs
+- `list_processes` - List all processes with their status and activity
 - `tail_process_logs` - Get latest entries from a specific process
-- `get_log_summary` - Get summary of log activity across all processes
+- `get_log_summary` - Get aggregated statistics across all processes
 
-## Installation
+## 🛠 Installation
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Build the project:
-   ```bash
-   npm run build
-   ```
+There are several ways to install and use the Console MCP tools:
 
-## Usage
+### Option 1: Global npm Installation (Recommended)
 
-### Starting the Console Logger
-
-Use the console logger to wrap any command:
+Install globally to use `console-logger` and `console-mcp` from any directory:
 
 ```bash
-# Start a development server
-console-logger "dev-server" npm run dev
+# Clone the repository
+git clone <repository-url>
+cd console_mcp
 
-# Run a Python script
-console-logger "python-app" python app.py
+# Install dependencies and build
+npm install
+npm run build
 
-# Start a Docker container with logs
-console-logger "docker-app" docker logs -f my-container
+# Install globally
+npm install -g .
 
-# Run any command with arguments
-console-logger "webpack-build" npx webpack --watch --mode development
+# Verify installation
+console-logger --help
+console-mcp --help
 ```
 
-The logger will:
+After global installation, you can use the tools from any terminal session:
 
-1. Display the command output in your console (normal behavior)
-2. Save structured logs to `./console_logs/[process-name].json`
-3. Include metadata like timestamps, log levels, PID, and source (stdout/stderr)
+```bash
+# Use from any directory
+cd ~/my-project
+console-logger "my-app" npm start
+```
+
+### Option 2: Local Installation with PATH
+
+Add the built binaries to your PATH for the current session or permanently:
+
+```bash
+# Clone and build
+git clone <repository-url>
+cd console_mcp
+npm install && npm run build
+
+# Add to PATH for current session
+export PATH="$PATH:$(pwd)/build"
+
+# Or add permanently to your shell profile (~/.zshrc, ~/.bashrc, etc.)
+echo 'export PATH="$PATH:/path/to/console_mcp/build"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+### Option 3: Shell Aliases
+
+Create convenient shell aliases for the tools:
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+alias console-logger='/path/to/console_mcp/build/logger.js'
+alias console-mcp='/path/to/console_mcp/build/index.js'
+
+# Reload shell configuration
+source ~/.zshrc
+```
+
+### Option 4: Local Development
+
+For development or testing without global installation:
+
+```bash
+# Clone and build
+git clone <repository-url>
+cd console_mcp
+npm install
+npm run build
+
+# Use with full paths
+./build/logger.js "my-process" npm start
+./build/index.js  # Start MCP server
+```
+
+### Quick Setup Script
+
+For the fastest setup, you can use this one-liner:
+
+```bash
+# Clone, build, and install globally in one command
+git clone <repository-url> console_mcp && cd console_mcp && npm install && npm run build && npm install -g . && echo "✅ Console MCP installed globally!"
+```
+
+Or create a setup script:
+
+```bash
+#!/bin/bash
+# setup-console-mcp.sh
+set -e
+
+echo "🚀 Setting up Console MCP..."
+
+# Clone repository
+if [ ! -d "console_mcp" ]; then
+  git clone <repository-url> console_mcp
+fi
+
+cd console_mcp
+
+# Install dependencies and build
+echo "📦 Installing dependencies..."
+npm install
+
+echo "🔨 Building project..."
+npm run build
+
+# Install globally
+echo "🌍 Installing globally..."
+npm install -g .
+
+echo "✅ Console MCP setup complete!"
+echo ""
+echo "You can now use:"
+echo "  console-logger \"my-app\" npm start"
+echo "  console-mcp"
+echo ""
+echo "Logs will be stored in ~/.console-logs/"
+```
+
+Make it executable and run:
+```bash
+chmod +x setup-console-mcp.sh
+./setup-console-mcp.sh
+```
+
+### Verification
+
+Test that the installation works:
+
+```bash
+# Test console logger
+console-logger "test" echo "Hello World"
+
+# Check that logs are created
+ls ~/.console-logs/
+
+# Test MCP server (in another terminal)
+console-mcp
+```
+
+### Dependencies
+- `better-sqlite3` - High-performance SQLite3 bindings
+- `@modelcontextprotocol/sdk` - MCP protocol implementation
+
+## 📖 Usage
+
+### 1. Start Console Logger
+Wrap any command to capture its output to the SQLite database:
+
+```bash
+# Start a web server with logging
+console-logger "my-server" npm start
+
+# Monitor a build process
+console-logger "webpack-build" npx webpack --watch
+
+# Log a Python application
+console-logger "python-app" python app.py
+
+# Follow Docker container logs
+console-logger "docker-container" docker logs -f container-name
+
+# Any command with arguments
+console-logger "my-process" command arg1 arg2
+```
+
+### Help and Options
+
+Get help for either tool:
+
+```bash
+# Console logger help
+console-logger --help
+console-logger
+
+# MCP server help  
+console-mcp --help
+```
+
+### Environment Variables
+
+- `CONSOLE_LOG_DIR` - Directory for SQLite database (default: `~/.console-logs`)
+
+Example:
+```bash
+# Use custom log directory
+export CONSOLE_LOG_DIR="/path/to/my/logs"
+console-logger "my-app" npm start
+```
+
+### 2. Use MCP Server
+The MCP server provides tools to search and analyze the captured logs:
+
+```bash
+# Start the MCP server
+console-mcp
+```
 
 ### Log File Structure
 
@@ -228,6 +388,109 @@ If the MCP server isn't connecting to Claude Desktop:
 1. Check the absolute path in your MCP configuration
 2. Ensure the project is built (`npm run build`)
 3. Restart Claude Desktop after configuration changes
+
+## 🔧 Troubleshooting
+
+### Global Installation Issues
+
+If `console-logger` or `console-mcp` commands are not found after global installation:
+
+1. **Check npm global bin directory:**
+   ```bash
+   npm config get prefix
+   npm bin -g
+   ```
+
+2. **Ensure global bin directory is in PATH:**
+   ```bash
+   echo $PATH
+   # Should include your npm global bin directory
+   ```
+
+3. **Add npm global bin to PATH if missing:**
+   ```bash
+   # Add to ~/.zshrc or ~/.bashrc
+   export PATH="$PATH:$(npm bin -g)"
+   source ~/.zshrc
+   ```
+
+4. **Alternative: Use npx (no global install needed):**
+   ```bash
+   npx /path/to/console_mcp/build/logger.js "my-app" npm start
+   ```
+
+### Permission Issues
+
+If you get permission errors during global installation:
+
+```bash
+# Option 1: Use sudo (not recommended)
+sudo npm install -g .
+
+# Option 2: Configure npm to use different directory (recommended)
+mkdir ~/.npm-global
+npm config set prefix '~/.npm-global'
+export PATH="$PATH:~/.npm-global/bin"
+```
+
+### Database Location
+
+By default, logs are stored in `~/.console-logs/`. To check or change:
+
+```bash
+# Check current location
+echo $CONSOLE_LOG_DIR
+
+# Set custom location
+export CONSOLE_LOG_DIR="/path/to/logs"
+mkdir -p "$CONSOLE_LOG_DIR"
+```
+
+### Shell Integration Tips
+
+For an even better experience, consider these shell enhancements:
+
+1. **Create shell functions for common patterns:**
+   ```bash
+   # Add to ~/.zshrc or ~/.bashrc
+   
+   # Function to easily start dev servers with logging
+   dev-with-logs() {
+     local name="${1:-dev-server}"
+     shift
+     console-logger "$name" "$@"
+   }
+   
+   # Function to tail logs for a process
+   logs() {
+     local process="$1"
+     console-mcp tail_process_logs --process="$process"
+   }
+   
+   # Function to search recent logs
+   search-logs() {
+     console-mcp search_logs --query="$1" --limit=20
+   }
+   ```
+
+2. **Quick aliases for common commands:**
+   ```bash
+   alias clog='console-logger'
+   alias cmcp='console-mcp'
+   alias show-logs='ls -la ~/.console-logs/'
+   ```
+
+3. **Usage examples with shell functions:**
+   ```bash
+   # Start development server with logging
+   dev-with-logs "my-app" npm run dev
+   
+   # Search for errors
+   search-logs "error"
+   
+   # View logs for specific process
+   logs "my-app"
+   ```
 
 ## License
 
