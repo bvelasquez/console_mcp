@@ -1,0 +1,35 @@
+{
+  "name": "console_mcp",
+  "version": "1.0.0",
+  "description": "MCP server for console logging and log file search",
+  "main": "build/index.js",
+  "type": "module",
+  "bin": {
+    "console-logger": "./build/logger.js",
+    "console-mcp": "./build/index.js"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x build/index.js build/logger.js",
+    "start": "npm run build && node build/index.js",
+    "logger": "npm run build && node build/logger.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "console",
+    "logging",
+    "bridge"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^24.0.3",
+    "chokidar": "^4.0.3",
+    "fs-extra": "^11.3.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.3",
+    "zod": "^3.25.67"
+  }
+}

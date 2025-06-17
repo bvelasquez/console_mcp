@@ -1,0 +1,14 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Console MCP",
+      "type": "shell",
+      "command": "npm",
+      "args": ["run", "build"],
+      "group": "build",
+      "isBackground": false,
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}
