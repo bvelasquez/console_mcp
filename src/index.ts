@@ -8,6 +8,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { LogDatabase } from "./database.js";
+import { getGitInfo } from "./git-utils.js";
 import * as path from "path";
 import * as os from "os";
 
@@ -145,6 +146,146 @@ class ConsoleLogMCPServer {
               },
             },
           },
+          {
+            name: "create_session_summary",
+            description:
+              "Create a session summary that can be searched by future Copilot sessions",
+            inputSchema: {
+              type: "object",
+              properties: {
+                title: {
+                  type: "string",
+                  description: "Title of the session summary",
+                },
+                description: {
+                  type: "string",
+                  description:
+                    "Detailed description of the session (can be markdown)",
+                },
+                tags: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Array of tags for categorizing the summary",
+                },
+                project: {
+                  type: "string",
+                  description:
+                    "Optional: Project name (auto-detected from git/package.json if not provided)",
+                },
+                llm_model: {
+                  type: "string",
+                  description: "Optional: LLM model used during the session",
+                },
+                files_changed: {
+                  type: "array",
+                  items: { type: "string" },
+                  description:
+                    "Optional: Array of file paths (auto-detected from git if not provided)",
+                },
+                workspace_root: {
+                  type: "string",
+                  description:
+                    "Optional: Root directory of the workspace for auto-detection",
+                },
+              },
+              required: ["title", "description"],
+            },
+          },
+          {
+            name: "search_session_summaries",
+            description:
+              "Search through session summaries for context and insights",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: {
+                  type: "string",
+                  description:
+                    "Search query to find relevant session summaries",
+                },
+                project: {
+                  type: "string",
+                  description: "Optional: Filter by specific project",
+                },
+                since: {
+                  type: "string",
+                  description:
+                    "Optional: Search summaries since this timestamp (ISO format)",
+                },
+                limit: {
+                  type: "number",
+                  description:
+                    "Optional: Limit number of results (default: 50)",
+                },
+              },
+              required: ["query"],
+            },
+          },
+          {
+            name: "get_session_summaries_by_project",
+            description: "Get session summaries for a specific project",
+            inputSchema: {
+              type: "object",
+              properties: {
+                project: {
+                  type: "string",
+                  description: "Project name to get summaries for",
+                },
+                limit: {
+                  type: "number",
+                  description:
+                    "Optional: Limit number of results (default: 50)",
+                },
+              },
+              required: ["project"],
+            },
+          },
+          {
+            name: "get_session_summaries_by_tags",
+            description: "Get session summaries by tags",
+            inputSchema: {
+              type: "object",
+              properties: {
+                tags: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Array of tags to search for",
+                },
+                limit: {
+                  type: "number",
+                  description:
+                    "Optional: Limit number of results (default: 50)",
+                },
+              },
+              required: ["tags"],
+            },
+          },
+          {
+            name: "get_recent_session_summaries",
+            description: "Get recent session summaries",
+            inputSchema: {
+              type: "object",
+              properties: {
+                hours: {
+                  type: "number",
+                  description: "Number of hours to look back (default: 24)",
+                },
+                limit: {
+                  type: "number",
+                  description:
+                    "Optional: Limit number of results (default: 50)",
+                },
+              },
+            },
+          },
+          {
+            name: "list_projects",
+            description: "List all projects that have session summaries",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -255,6 +396,152 @@ class ConsoleLogMCPServer {
                 {
                   type: "text",
                   text: JSON.stringify(summary, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "create_session_summary": {
+            const {
+              title,
+              description,
+              tags = [],
+              project,
+              llm_model,
+              files_changed,
+              workspace_root,
+            } = args as {
+              title: string;
+              description: string;
+              tags?: string[];
+              project?: string;
+              llm_model?: string;
+              files_changed?: string[];
+              workspace_root?: string;
+            };
+
+            // Auto-detect project info if not provided
+            const gitInfo = getGitInfo(workspace_root);
+            const finalProject = project || gitInfo.projectName;
+            const finalFilesChanged = files_changed || gitInfo.changedFiles;
+
+            const sessionSummary = {
+              title,
+              description,
+              tags: JSON.stringify(tags),
+              timestamp: new Date().toISOString(),
+              project: finalProject,
+              llm_model,
+              files_changed: JSON.stringify(finalFilesChanged),
+            };
+
+            const id = this.db.createSessionSummary(sessionSummary);
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session summary created with ID: ${id}\nProject: ${finalProject}\nFiles changed: ${finalFilesChanged.length} files`,
+                },
+              ],
+            };
+          }
+
+          case "search_session_summaries": {
+            const {
+              query,
+              project,
+              since,
+              limit = 50,
+            } = args as {
+              query: string;
+              project?: string;
+              since?: string;
+              limit?: number;
+            };
+
+            const results = this.db.searchSessionSummaries(
+              query,
+              limit,
+              project,
+              since,
+            );
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(results, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "get_session_summaries_by_project": {
+            const { project, limit = 50 } = args as {
+              project: string;
+              limit?: number;
+            };
+
+            const results = this.db.getSessionSummariesByProject(
+              project,
+              limit,
+            );
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(results, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "get_session_summaries_by_tags": {
+            const { tags, limit = 50 } = args as {
+              tags: string[];
+              limit?: number;
+            };
+
+            const results = this.db.getSessionSummariesByTags(tags, limit);
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(results, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "get_recent_session_summaries": {
+            const { hours = 24, limit = 50 } = args as {
+              hours?: number;
+              limit?: number;
+            };
+
+            const results = this.db.getRecentSessionSummaries(hours, limit);
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(results, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "list_projects": {
+            const projects = this.db.getAllProjects();
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(projects, null, 2),
                 },
               ],
             };

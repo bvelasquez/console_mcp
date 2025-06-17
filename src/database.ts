@@ -23,6 +23,17 @@ export interface Process {
   pid?: number;
 }
 
+export interface SessionSummary {
+  id?: number;
+  title: string;
+  description: string;
+  tags: string; // JSON array of tags as string
+  timestamp: string;
+  project: string;
+  llm_model?: string;
+  files_changed: string; // JSON array of file paths as string
+}
+
 export class LogDatabase {
   private db: Database.Database;
 
@@ -68,6 +79,20 @@ export class LogDatabase {
       )
     `);
 
+    // Create session_summaries table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS session_summaries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        tags TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        project TEXT NOT NULL,
+        llm_model TEXT,
+        files_changed TEXT NOT NULL
+      )
+    `);
+
     // Create FTS5 table for full-text search
     this.db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS log_search USING fts5(
@@ -79,7 +104,19 @@ export class LogDatabase {
       )
     `);
 
-    // Create triggers to maintain FTS index
+    // Create FTS5 table for session summary search
+    this.db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS session_search USING fts5(
+        title,
+        description,
+        tags,
+        project,
+        content='session_summaries',
+        content_rowid='id'
+      )
+    `);
+
+    // Create triggers to maintain FTS index for logs
     this.db.exec(`
       CREATE TRIGGER IF NOT EXISTS log_entries_ai AFTER INSERT ON log_entries BEGIN
         INSERT INTO log_search(rowid, message, raw_output, process_name)
@@ -93,6 +130,31 @@ export class LogDatabase {
         DELETE FROM log_search WHERE rowid = old.id;
       END;
     `);
+
+    // Create triggers to maintain FTS index for session summaries
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS session_summaries_ai AFTER INSERT ON session_summaries BEGIN
+        INSERT INTO session_search(rowid, title, description, tags, project)
+        VALUES (new.id, new.title, new.description, new.tags, new.project);
+      END;
+    `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS session_summaries_au AFTER UPDATE ON session_summaries BEGIN
+        UPDATE session_search SET
+          title = new.title,
+          description = new.description,
+          tags = new.tags,
+          project = new.project
+        WHERE rowid = new.id;
+      END;
+    `);
+
+    this.db.exec(`
+      CREATE TRIGGER IF NOT EXISTS session_summaries_ad AFTER DELETE ON session_summaries BEGIN
+        DELETE FROM session_search WHERE rowid = old.id;
+      END;
+    `);
   }
 
   private optimizeDatabase() {
@@ -103,6 +165,8 @@ export class LogDatabase {
       CREATE INDEX IF NOT EXISTS idx_log_entries_level ON log_entries(level);
       CREATE INDEX IF NOT EXISTS idx_processes_name ON processes(name);
       CREATE INDEX IF NOT EXISTS idx_processes_status ON processes(status);
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_timestamp ON session_summaries(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_session_summaries_project ON session_summaries(project);
     `);
 
     // Set pragmas for better performance
@@ -290,6 +354,112 @@ export class LogDatabase {
       .get(since, since);
 
     return summary as any;
+  }
+
+  // Session summary management
+  createSessionSummary(summary: Omit<SessionSummary, "id">): number {
+    const stmt = this.db.prepare(`
+      INSERT INTO session_summaries (title, description, tags, timestamp, project, llm_model, files_changed)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    const result = stmt.run(
+      summary.title,
+      summary.description,
+      summary.tags,
+      summary.timestamp,
+      summary.project,
+      summary.llm_model,
+      summary.files_changed,
+    );
+    return result.lastInsertRowid as number;
+  }
+
+  searchSessionSummaries(
+    query: string,
+    limit: number = 50,
+    project?: string,
+    since?: string,
+  ): SessionSummary[] {
+    let sql = `
+      SELECT ss.*
+      FROM session_search s
+      JOIN session_summaries ss ON s.rowid = ss.id
+      WHERE session_search MATCH ?
+    `;
+
+    const params: any[] = [query];
+
+    if (project) {
+      sql += " AND ss.project = ?";
+      params.push(project);
+    }
+
+    if (since) {
+      sql += " AND ss.timestamp > ?";
+      params.push(since);
+    }
+
+    sql += " ORDER BY ss.timestamp DESC LIMIT ?";
+    params.push(limit);
+
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params) as SessionSummary[];
+  }
+
+  getSessionSummariesByProject(
+    project: string,
+    limit: number = 50,
+  ): SessionSummary[] {
+    const stmt = this.db.prepare(`
+      SELECT * FROM session_summaries
+      WHERE project = ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `);
+    return stmt.all(project, limit) as SessionSummary[];
+  }
+
+  getSessionSummariesByTags(
+    tags: string[],
+    limit: number = 50,
+  ): SessionSummary[] {
+    // Search for summaries that contain any of the specified tags
+    const placeholders = tags
+      .map(() => "json_extract(tags, '$') LIKE ?")
+      .join(" OR ");
+    const sql = `
+      SELECT * FROM session_summaries
+      WHERE ${placeholders}
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `;
+
+    const params: any[] = tags.map((tag) => `%"${tag}"%`);
+    params.push(limit);
+    const stmt = this.db.prepare(sql);
+    return stmt.all(...params) as SessionSummary[];
+  }
+
+  getRecentSessionSummaries(
+    hours: number = 24,
+    limit: number = 50,
+  ): SessionSummary[] {
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const stmt = this.db.prepare(`
+      SELECT * FROM session_summaries
+      WHERE timestamp > ?
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `);
+    return stmt.all(since, limit) as SessionSummary[];
+  }
+
+  getAllProjects(): string[] {
+    const stmt = this.db.prepare(`
+      SELECT DISTINCT project FROM session_summaries
+      ORDER BY project
+    `);
+    return stmt.all().map((row: any) => row.project);
   }
 
   close() {

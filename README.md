@@ -259,6 +259,61 @@ The MCP server provides tools that Copilot can use to search and analyze your lo
 
 - `CONSOLE_LOG_DIR` - Directory to store log files (default: `./console_logs`)
 
+## 📝 Session Summaries
+
+The Console MCP server now includes powerful session summary capabilities that allow Copilot sessions to store and search context across different VS Code instances and sessions.
+
+### Creating Session Summaries
+
+Session summaries capture important information about your development sessions:
+
+```typescript
+// Example: Creating a session summary
+{
+  title: "Implemented User Authentication",
+  description: `# Authentication Feature Implementation
+  
+  ## What was accomplished:
+  - Added JWT token validation
+  - Implemented login/logout endpoints
+  - Created user session middleware
+  
+  ## Key changes:
+  - Modified auth.ts to include bcrypt hashing
+  - Updated API routes for security
+  - Added environment variables for JWT secrets`,
+  
+  tags: ["authentication", "security", "api-endpoints"],
+  project: "my-webapp",  // Auto-detected from git/package.json
+  llm_model: "claude-3.5-sonnet",
+  files_changed: ["src/auth.ts", "api/login.ts", ".env.example"]  // Auto-detected from git
+}
+```
+
+### Auto-Detection Features
+
+The session summary system automatically detects:
+
+- **Project name** from `package.json` or git repository name
+- **Changed files** from git status (unstaged, staged, and recent commits)
+- **Git repository context** for better organization
+
+### Searching Session Summaries
+
+Use the MCP tools to find relevant context from previous sessions:
+
+- `search_session_summaries` - Full-text search across titles, descriptions, and tags
+- `get_session_summaries_by_project` - Find all summaries for a specific project
+- `get_session_summaries_by_tags` - Filter by specific tags like "bug-fix" or "feature"
+- `get_recent_session_summaries` - Get recent development activity
+
+### Use Cases
+
+1. **Cross-Session Context**: When starting work on a project, search for related summaries to understand recent changes
+2. **Team Collaboration**: Share development insights and lessons learned
+3. **Project Documentation**: Maintain a searchable history of development decisions
+4. **Debugging**: Find similar issues and solutions from previous sessions
+
 ### MCP Configuration
 
 Add to your Claude Desktop configuration (`~/Library/Application Support/Claude/claude_desktop_config.json`):

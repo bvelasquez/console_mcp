@@ -3,10 +3,7 @@
     "console-mcp": {
       "type": "stdio",
       "command": "node",
-      "args": ["/Users/barryvelasquez/projects/console_mcp/build/index.js"],
-      "env": {
-        "CONSOLE_LOG_DIR": "/Users/barryvelasquez/logs"
-      }
+      "args": ["/Users/barryvelasquez/projects/console_mcp/build/index.js"]
     }
   }
 }

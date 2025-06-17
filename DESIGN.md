@@ -2,10 +2,11 @@
 
 ## Overview
 
-The Console MCP (Model Context Protocol) is a bridge system that connects external console processes with Copilot through structured log capture and search capabilities. This project consists of two main components:
+The Console MCP (Model Context Protocol) is a bridge system that connects external console processes with Copilot through structured log capture, search capabilities, and session context management. This project consists of three main components:
 
 1. **Console Logger** - A command wrapper that captures stdout/stderr from any process and stores it in a searchable database
 2. **MCP Server** - Provides tools for searching, analyzing, and monitoring the captured logs through the Model Context Protocol
+3. **Session Summary System** - Captures and enables searching of development session context across different Copilot instances
 
 ## Architecture
 
@@ -28,16 +29,19 @@ graph TB
     subgraph "Storage Layer"
         DB[(SQLite Database<br/>console_logs.db)]
         FTS[Full-Text Search<br/>FTS5 Index]
+        SS[(Session Summaries<br/>Cross-session context)]
     end
 
     subgraph "MCP Server Layer"
         MCP[MCP Server<br/>index.ts]
         Tools[Search Tools]
+        SessionTools[Session Tools]
     end
 
     subgraph "Client Layer"
         Copilot[GitHub Copilot]
         VSCode[VS Code]
+        Git[Git Integration<br/>Auto-detection]
     end
 
     P1 --> CL1
@@ -49,18 +53,24 @@ graph TB
     CL3 --> DB
 
     DB --> FTS
+    DB --> SS
 
     MCP --> DB
     MCP --> FTS
+    MCP --> SS
     Tools --> MCP
+    SessionTools --> MCP
 
     Copilot --> MCP
     VSCode --> MCP
+    Git --> MCP
 
     style DB fill:#e1f5fe
     style FTS fill:#e8f5e8
+    style SS fill:#fff9c4
     style MCP fill:#fff3e0
     style Tools fill:#f3e5f5
+    style SessionTools fill:#e8f5e8
 ```
 
 ### Component Interaction Flow
@@ -165,14 +175,34 @@ erDiagram
         string source
     }
 
+    SESSION_SUMMARIES {
+        int id PK
+        string title
+        string description
+        string tags
+        string timestamp
+        string project
+        string llm_model
+        string files_changed
+    }
+
     LOG_ENTRIES_FTS {
         string message
         string raw_output
         int rowid
     }
 
+    SESSION_SEARCH_FTS {
+        string title
+        string description
+        string tags
+        string project
+        int rowid
+    }
+
     PROCESSES ||--o{ LOG_ENTRIES : "has many"
     LOG_ENTRIES ||--|| LOG_ENTRIES_FTS : "indexed by"
+    SESSION_SUMMARIES ||--|| SESSION_SEARCH_FTS : "indexed by"
 ```
 
 #### Database Features
@@ -191,28 +221,52 @@ The MCP Server exposes structured tools for log analysis through the Model Conte
 ```mermaid
 mindmap
   root((MCP Tools))
-    search_logs
-      Full-text search
-      Filter by process
-      Filter by level
-      Time-based filtering
-      FTS5 syntax support
-    get_recent_errors
-      Time-based error filtering
-      Process-specific errors
-      Configurable lookback
-    list_processes
-      All logged processes
-      Active processes only
-      Process metadata
-    tail_process_logs
-      Real-time log following
-      Level filtering
-      Configurable line count
-    get_log_summary
-      Activity summaries
-      Error rate analysis
-      Process statistics
+    Log Analysis
+      search_logs
+        Full-text search
+        Filter by process
+        Filter by level
+        Time-based filtering
+        FTS5 syntax support
+      get_recent_errors
+        Time-based error filtering
+        Process-specific errors
+        Configurable lookback
+      list_processes
+        All logged processes
+        Active processes only
+        Process metadata
+      tail_process_logs
+        Real-time log following
+        Level filtering
+        Configurable line count
+      get_log_summary
+        Activity summaries
+        Error rate analysis
+        Process statistics
+    Session Management
+      create_session_summary
+        Store development sessions
+        Auto-detect project info
+        Auto-detect changed files
+        Git integration
+      search_session_summaries
+        Full-text search across sessions
+        Filter by project
+        Filter by time range
+        Cross-session context
+      get_session_summaries_by_project
+        Project-specific sessions
+        Development history
+      get_session_summaries_by_tags
+        Tag-based filtering
+        Topic organization
+      get_recent_session_summaries
+        Recent development activity
+        Timeline view
+      list_projects
+        All projects with sessions
+        Project discovery
 ```
 
 #### Tool Implementation Pattern
@@ -230,139 +284,116 @@ flowchart LR
     G -->|No| C
 ```
 
-## Data Flow
+### 4. Session Summary System (`src/git-utils.ts`)
 
-### Log Capture Flow
+The Session Summary System enables persistent context sharing across different Copilot sessions and VS Code instances.
 
-```mermaid
-flowchart TD
-    A[External Command] --> B[Console Logger Spawn]
-    B --> C[Process Execution]
+#### Session Summary Features
 
-    C --> D[stdout Output]
-    C --> E[stderr Output]
+- **Cross-Session Context**: Store and retrieve development session summaries
+- **Automatic Git Integration**: Auto-detect project names and changed files
+- **Full-Text Search**: Search across session titles, descriptions, and tags
+- **Project Organization**: Group sessions by project for easy navigation
+- **Tag-Based Categorization**: Organize sessions with searchable tags
 
-    D --> F[Log Level Detection]
-    E --> F
-
-    F --> G[Message Parsing]
-    G --> H[Database Insert]
-
-    H --> I[(SQLite Storage)]
-    I --> J[FTS5 Indexing]
-
-    C --> K{Process Exit?}
-    K -->|No| C
-    K -->|Yes| L[Update Process Status]
-    L --> I
-```
-
-### Search Query Flow
+#### Session Summary Flow
 
 ```mermaid
 flowchart TD
-    A[MCP Client Request] --> B[Tool Handler]
-    B --> C[Parameter Validation]
-    C --> D[Build SQL Query]
+    A[Development Session] --> B[Session Complete]
+    B --> C[Create Session Summary]
+    C --> D[Auto-detect Project Info]
+    D --> E[Git Integration]
 
-    D --> E{Use FTS5?}
-    E -->|Yes| F[Full-Text Search Query]
-    E -->|No| G[Standard SQL Query]
+    E --> F[Get Project Name]
+    E --> G[Get Changed Files]
 
-    F --> H[Execute Query]
-    G --> H
+    F --> H[From package.json]
+    F --> I[From git repo name]
+    F --> J[From directory name]
 
-    H --> I[Result Processing]
-    I --> J[Apply Filters]
-    J --> K[Format Response]
-    K --> L[Return to Client]
+    G --> K[Unstaged changes]
+    G --> L[Staged changes]
+    G --> M[Recent commits]
 
-    C --> M{Invalid Params?}
-    M -->|Yes| N[Error Response]
-    M -->|No| D
+    D --> N[Store Summary]
+    N --> O[(Session Database)]
+    O --> P[FTS5 Indexing]
+
+    Q[Future Copilot Session] --> R[Search for Context]
+    R --> S[Query Session Database]
+    S --> T[Retrieve Relevant Sessions]
+    T --> U[Provide Context]
 ```
 
-## Key Design Decisions
-
-### 1. SQLite with FTS5
-
-- **Rationale**: Provides excellent full-text search capabilities without external dependencies
-- **Benefits**: Fast text searches, simple deployment, ACID compliance
-- **Trade-offs**: Single-writer limitation (acceptable for this use case)
-
-### 2. Real-time Log Streaming
-
-- **Rationale**: Immediate availability of logs for debugging active processes
-- **Implementation**: Synchronous database writes on each log line
-- **Performance**: Optimized with WAL mode and prepared statements
-
-### 3. Automatic Log Level Detection
-
-- **Rationale**: Reduces manual configuration while providing useful categorization
-- **Algorithm**: Keyword-based detection with stderr source prioritization
-- **Fallback**: Default to 'info' level when uncertain
-
-### 4. Process-centric Organization
-
-- **Rationale**: Natural grouping for troubleshooting and analysis
-- **Benefits**: Easy process-specific filtering and lifecycle tracking
-- **Implementation**: Foreign key relationship with cascade cleanup
-
-## Performance Considerations
-
-### Database Optimization
-
-```sql
--- Indexing strategy for common queries
-CREATE INDEX idx_log_entries_timestamp ON log_entries(timestamp);
-CREATE INDEX idx_log_entries_level ON log_entries(level);
-CREATE INDEX idx_log_entries_process_id ON log_entries(process_id);
-
--- FTS5 virtual table for full-text search
-CREATE VIRTUAL TABLE log_entries_fts USING fts5(
-  message, raw_output, content='log_entries', content_rowid='id'
-);
-```
-
-### Memory Management
-
-- **Streaming Processing**: Process logs line-by-line to avoid memory accumulation
-- **Batch Inserts**: Group database operations for better performance
-- **Connection Pooling**: Reuse database connections across operations
-
-## Security Considerations
-
-### Data Protection
-
-- **Local Storage**: All logs stored locally, no external transmission
-- **File Permissions**: Database files created with restricted permissions
-- **Input Sanitization**: All user inputs validated and sanitized
-
-### Process Isolation
-
-- **Child Process Security**: Spawned processes inherit minimal environment
-- **Command Validation**: Basic validation of command arguments
-- **Error Handling**: Graceful handling of process failures
-
-## Usage Patterns
-
-### Development Workflow
+#### Git Integration Strategy
 
 ```mermaid
-graph LR
-    A[Start Development] --> B[Launch Processes with Logger]
-    B --> C[Code & Test]
-    C --> D{Issues Found?}
-    D -->|Yes| E[Query Logs via Copilot]
-    E --> F[Analyze Errors]
-    F --> G[Fix Issues]
-    G --> C
-    D -->|No| H[Continue Development]
+flowchart TD
+    A[getGitChangedFiles] --> B{Try HEAD~5..HEAD}
+    B -->|Success| C[Get Recent Commits]
+    B -->|Fail| D{Try HEAD~1..HEAD}
+    D -->|Success| E[Get Last Commit]
+    D -->|Fail| F{Try ls-files --modified}
+    F -->|Success| G[Get Modified Files]
+    F -->|Fail| H[Empty Array]
 
-    E --> I[search_logs tool]
-    E --> J[get_recent_errors tool]
-    E --> K[tail_process_logs tool]
+    I[getProjectName] --> J{Check package.json}
+    J -->|Found| K[Use package.name]
+    J -->|Not Found| L{Check git remote}
+    L -->|Found| M[Extract repo name]
+    L -->|Not Found| N[Use directory name]
+
+    C --> O[Combine & Deduplicate]
+    E --> O
+    G --> O
+    H --> O
+
+    K --> P[Return Project Info]
+    M --> P
+    N --> P
 ```
+
+#### Session Summary Schema
+
+```json
+{
+  "id": 1,
+  "title": "Implemented Authentication System",
+  "description": "# Authentication Implementation\n\n## Overview\n...",
+  "tags": "[\"authentication\", \"security\", \"api\"]",
+  "timestamp": "2025-06-17T23:09:20.411Z",
+  "project": "my-webapp",
+  "llm_model": "claude-3.5-sonnet",
+  "files_changed": "[\"src/auth.ts\", \"api/login.ts\", \".env.example\"]"
+}
+```
+
+#### Use Cases
+
+1. **Cross-Session Context Retrieval**:
+   ```text
+   Copilot: "Search for previous authentication work"
+   → search_session_summaries(query="authentication")
+   ```
+
+2. **Project Development History**:
+   ```text
+   Copilot: "Show me all work done on this project"
+   → get_session_summaries_by_project(project="my-webapp")
+   ```
+
+3. **Feature-Specific Context**:
+   ```text
+   Copilot: "Find sessions about bug fixes"
+   → get_session_summaries_by_tags(tags=["bug-fix"])
+   ```
+
+4. **Recent Development Activity**:
+   ```text
+   Copilot: "What was worked on recently?"
+   → get_recent_session_summaries(hours=72)
+   ```
 
 ### Debugging Scenarios
 
@@ -387,51 +418,40 @@ graph LR
    → search_logs(query="database connection", level="error")
    ```
 
-## Future Enhancements
+4. **Context-Aware Debugging**:
+
+   ```text
+   Copilot: "What authentication work was done previously?"
+   → search_session_summaries(query="authentication")
+   ```
+
+5. **Project History Analysis**:
+
+   ```text
+   Copilot: "Show me all bug fixes for this project"
+   → get_session_summaries_by_tags(tags=["bug-fix"])
+   ```
+
+6. **Cross-Session Problem Solving**:
+
+   ```text
+   Copilot: "Find similar database issues from past sessions"
+   → search_session_summaries(query="database error solution")
+   ```
 
 ### Potential Improvements
 
+**Log Management**:
 - **Log Rotation**: Automatic cleanup of old logs based on age/size
 - **Performance Metrics**: CPU/memory usage tracking for processes
 - **Real-time Notifications**: Alert system for critical errors
 - **Log Aggregation**: Merge logs from multiple sources
 - **Export Capabilities**: Export logs in various formats (JSON, CSV)
 
-### Scalability Considerations
-
-- **Horizontal Scaling**: Multiple MCP servers for different log directories
-- **Compression**: Compress old log entries to save space
-- **Partitioning**: Partition large tables by time ranges
-- **Caching**: Cache frequently accessed queries
-
-## Integration Examples
-
-### VS Code Integration
-
-```json
-{
-  "mcpServers": {
-    "console-mcp": {
-      "command": "node",
-      "args": ["/path/to/console_mcp/build/index.js"],
-      "env": {
-        "CONSOLE_LOG_DIR": "/path/to/logs"
-      }
-    }
-  }
-}
-```
-
-### Development Script Integration
-
-```bash
-#!/bin/bash
-# start-dev.sh
-console-logger "frontend" npm run dev &
-console-logger "backend" python manage.py runserver &
-console-logger "worker" celery worker &
-
-echo "All processes started with logging enabled"
-```
-
-This design enables powerful debugging workflows where developers can use natural language queries through Copilot to investigate issues across multiple concurrent processes, making the development and debugging process more efficient and intuitive.
+**Session Enhancement**:
+- **Automatic Session Detection**: Smart detection of session boundaries
+- **Visual Session Timeline**: Timeline view of development sessions
+- **Session Sharing**: Export/import session summaries for team collaboration
+- **AI-Powered Insights**: Automatic extraction of key insights from sessions
+- **Integration with Git History**: Link sessions to specific commits/branches
+- **Session Templates**: Pre-defined templates for common session types
