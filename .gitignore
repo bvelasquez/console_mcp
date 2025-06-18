@@ -138,8 +138,11 @@ Thumbs.db
 console_logs/*.json
 !/console_logs/.gitkeep
 
-# Test files
+# Temporary test files (tests/ directory contains official tests)
 test-*.js
+debug-*.js
+simple-*.js
+investigate-*.js
 
 # Backup files
 *.bak

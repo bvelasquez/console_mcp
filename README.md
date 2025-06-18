@@ -22,6 +22,8 @@ An MCP (Model Context Protocol) server that provides a bridge between external c
 - `list_processes` - List all processes with their status and activity
 - `tail_process_logs` - Get latest entries from a specific process
 - `get_log_summary` - Get aggregated statistics across all processes
+- `prune_old_logs` - Remove old console logs to free up space (with dry-run support)
+- `get_log_statistics` - Get database statistics including size and age information
 
 ## 🛠 Installation
 
@@ -319,11 +321,13 @@ console-mcp --help
 ### Environment Variables
 
 - `CONSOLE_LOG_DIR` - Directory for SQLite database (default: `~/.console-logs`)
+- `CONSOLE_LOG_MAX_AGE_HOURS` - Auto-prune logs older than this many hours (default: 336 = 2 weeks)
 
 Example:
 ```bash
-# Use custom log directory
+# Use custom log directory and auto-prune logs older than 1 week (168 hours)
 export CONSOLE_LOG_DIR="/path/to/my/logs"
+export CONSOLE_LOG_MAX_AGE_HOURS=168
 console-logger "my-app" npm start
 ```
 

@@ -286,6 +286,36 @@ class ConsoleLogMCPServer {
               properties: {},
             },
           },
+          {
+            name: "prune_old_logs",
+            description:
+              "Remove old console logs from the database to free up space. Only affects console logs, not session summaries.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                max_age_hours: {
+                  type: "number",
+                  description:
+                    "Maximum age of logs to keep in hours (e.g., 168 for 1 week, 720 for 1 month)",
+                },
+                dry_run: {
+                  type: "boolean",
+                  description:
+                    "Optional: If true, shows what would be deleted without actually deleting (default: false)",
+                },
+              },
+              required: ["max_age_hours"],
+            },
+          },
+          {
+            name: "get_log_statistics",
+            description:
+              "Get statistics about the console logs database including size and age",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+          },
         ],
       };
     });
@@ -542,6 +572,119 @@ class ConsoleLogMCPServer {
                 {
                   type: "text",
                   text: JSON.stringify(projects, null, 2),
+                },
+              ],
+            };
+          }
+
+          case "prune_old_logs": {
+            if (!args) {
+              throw new Error("Missing required arguments");
+            }
+
+            const maxAgeHours = args.max_age_hours as number;
+            const dryRun = (args.dry_run as boolean) || false;
+
+            if (dryRun) {
+              // For dry run, count what would be deleted
+              const cutoffTime = new Date(
+                Date.now() - maxAgeHours * 60 * 60 * 1000,
+              ).toISOString();
+
+              // Count logs that would be deleted
+              const countStmt = this.db["db"].prepare(`
+                SELECT COUNT(*) as count FROM log_entries
+                WHERE timestamp < ?
+              `);
+              const logsToDeleteCount = (
+                countStmt.get(cutoffTime) as { count: number }
+              ).count;
+
+              // Count processes that would become orphaned
+              const orphanCountStmt = this.db["db"].prepare(`
+                SELECT COUNT(DISTINCT p.id) as count FROM processes p
+                WHERE NOT EXISTS (
+                  SELECT 1 FROM log_entries le 
+                  WHERE le.process_id = p.id AND le.timestamp >= ?
+                )
+              `);
+              const processesToDeleteCount = (
+                orphanCountStmt.get(cutoffTime) as { count: number }
+              ).count;
+
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        dry_run: true,
+                        max_age_hours: maxAgeHours,
+                        cutoff_time: cutoffTime,
+                        logs_that_would_be_deleted: logsToDeleteCount,
+                        processes_that_would_be_deleted: processesToDeleteCount,
+                        message: `DRY RUN: Would delete ${logsToDeleteCount} log entries and ${processesToDeleteCount} orphaned processes older than ${maxAgeHours} hours`,
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            } else {
+              const result = this.db.pruneOldLogs(maxAgeHours);
+
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify(
+                      {
+                        max_age_hours: maxAgeHours,
+                        deleted_logs: result.deletedLogs,
+                        deleted_processes: result.deletedProcesses,
+                        message: `Successfully deleted ${result.deletedLogs} old log entries and ${result.deletedProcesses} orphaned processes`,
+                      },
+                      null,
+                      2,
+                    ),
+                  },
+                ],
+              };
+            }
+          }
+
+          case "get_log_statistics": {
+            const stats = this.db.getLogStatistics();
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(
+                    {
+                      ...stats,
+                      disk_usage_mb:
+                        Math.round((stats.diskUsageKB / 1024) * 100) / 100,
+                      age_info:
+                        stats.oldestLog && stats.newestLog
+                          ? {
+                              oldest_log_age_hours: Math.round(
+                                (new Date().getTime() -
+                                  new Date(stats.oldestLog).getTime()) /
+                                  (1000 * 60 * 60),
+                              ),
+                              newest_log_age_hours: Math.round(
+                                (new Date().getTime() -
+                                  new Date(stats.newestLog).getTime()) /
+                                  (1000 * 60 * 60),
+                              ),
+                            }
+                          : null,
+                    },
+                    null,
+                    2,
+                  ),
                 },
               ],
             };

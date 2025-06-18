@@ -93,68 +93,103 @@ export class LogDatabase {
       )
     `);
 
-    // Create FTS5 table for full-text search
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS log_search USING fts5(
-        message,
-        raw_output,
-        process_name,
-        content='log_entries',
-        content_rowid='id'
-      )
-    `);
+    // Reset FTS tables to ensure clean schema
+    this.resetFTSTables();
 
-    // Create FTS5 table for session summary search
-    this.db.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS session_search USING fts5(
-        title,
-        description,
-        tags,
-        project,
-        content='session_summaries',
-        content_rowid='id'
-      )
-    `);
+    this.optimizeDatabase();
+  }
 
-    // Create triggers to maintain FTS index for logs
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS log_entries_ai AFTER INSERT ON log_entries BEGIN
-        INSERT INTO log_search(rowid, message, raw_output, process_name)
-        SELECT new.id, new.message, new.raw_output, p.name
-        FROM processes p WHERE p.id = new.process_id;
-      END;
-    `);
+  private resetFTSTables() {
+    try {
+      // Drop existing FTS tables and triggers if they exist
+      this.db.exec("DROP TRIGGER IF EXISTS log_entries_ai");
+      this.db.exec("DROP TRIGGER IF EXISTS log_entries_ad");
+      this.db.exec("DROP TRIGGER IF EXISTS session_summaries_ai");
+      this.db.exec("DROP TRIGGER IF EXISTS session_summaries_au");
+      this.db.exec("DROP TRIGGER IF EXISTS session_summaries_ad");
+      this.db.exec("DROP TABLE IF EXISTS log_search");
+      this.db.exec("DROP TABLE IF EXISTS session_search");
 
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS log_entries_ad AFTER DELETE ON log_entries BEGIN
-        DELETE FROM log_search WHERE rowid = old.id;
-      END;
-    `);
+      // Create fresh FTS tables
+      this.db.exec(`
+        CREATE VIRTUAL TABLE log_search USING fts5(
+          message,
+          raw_output,
+          process_name
+        )
+      `);
 
-    // Create triggers to maintain FTS index for session summaries
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS session_summaries_ai AFTER INSERT ON session_summaries BEGIN
-        INSERT INTO session_search(rowid, title, description, tags, project)
-        VALUES (new.id, new.title, new.description, new.tags, new.project);
-      END;
-    `);
+      this.db.exec(`
+        CREATE VIRTUAL TABLE session_search USING fts5(
+          title,
+          description,
+          tags,
+          project
+        )
+      `);
 
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS session_summaries_au AFTER UPDATE ON session_summaries BEGIN
-        UPDATE session_search SET
-          title = new.title,
-          description = new.description,
-          tags = new.tags,
-          project = new.project
-        WHERE rowid = new.id;
-      END;
-    `);
+      // Create triggers for logs (only INSERT trigger, no DELETE trigger to avoid issues)
+      this.db.exec(`
+        CREATE TRIGGER log_entries_ai AFTER INSERT ON log_entries BEGIN
+          INSERT INTO log_search(message, raw_output, process_name)
+          SELECT new.message, new.raw_output, p.name
+          FROM processes p WHERE p.id = new.process_id;
+        END;
+      `);
 
-    this.db.exec(`
-      CREATE TRIGGER IF NOT EXISTS session_summaries_ad AFTER DELETE ON session_summaries BEGIN
-        DELETE FROM session_search WHERE rowid = old.id;
-      END;
-    `);
+      // Create triggers for session summaries
+      this.db.exec(`
+        CREATE TRIGGER session_summaries_ai AFTER INSERT ON session_summaries BEGIN
+          INSERT INTO session_search(title, description, tags, project)
+          VALUES (new.title, new.description, new.tags, new.project);
+        END;
+      `);
+
+      this.db.exec(`
+        CREATE TRIGGER session_summaries_au AFTER UPDATE ON session_summaries BEGIN
+          UPDATE session_search SET
+            title = new.title,
+            description = new.description,
+            tags = new.tags,
+            project = new.project
+          WHERE rowid = new.id;
+        END;
+      `);
+
+      this.db.exec(`
+        CREATE TRIGGER session_summaries_ad AFTER DELETE ON session_summaries BEGIN
+          DELETE FROM session_search WHERE rowid = old.id;
+        END;
+      `);
+
+      // Populate FTS tables with existing data
+      this.rebuildFTSIndex();
+    } catch (error) {
+      console.warn(
+        "Warning: FTS reset failed, continuing without full-text search:",
+        error,
+      );
+    }
+  }
+
+  private rebuildFTSIndex() {
+    try {
+      // Rebuild log search index
+      this.db.exec(`
+        INSERT INTO log_search(message, raw_output, process_name)
+        SELECT le.message, le.raw_output, p.name
+        FROM log_entries le
+        JOIN processes p ON le.process_id = p.id
+      `);
+
+      // Rebuild session search index
+      this.db.exec(`
+        INSERT INTO session_search(title, description, tags, project)
+        SELECT title, description, tags, project FROM session_summaries
+      `);
+    } catch (error) {
+      console.warn("Warning: FTS index rebuild failed:", error);
+    }
   }
 
   private optimizeDatabase() {
@@ -245,20 +280,43 @@ export class LogDatabase {
     level?: string,
     since?: string,
   ): Array<LogEntry & { process_name: string }> {
+    // Search approach: First find matching entries in FTS, then join with full data
+    let ftsQuery = query;
+    if (processName) {
+      ftsQuery += ` AND process_name:${processName}`;
+    }
+
+    // Get the messages and raw_output from FTS search
+    const ftsResults = this.db
+      .prepare(
+        `
+      SELECT message, raw_output, process_name FROM log_search WHERE log_search MATCH ?
+    `,
+      )
+      .all(ftsQuery) as Array<{
+      message: string;
+      raw_output: string;
+      process_name: string;
+    }>;
+
+    if (ftsResults.length === 0) {
+      return [];
+    }
+
+    // Build a query to find the actual log entries that match the FTS results
     let sql = `
       SELECT le.*, p.name as process_name
-      FROM log_search ls
-      JOIN log_entries le ON ls.rowid = le.id
+      FROM log_entries le
       JOIN processes p ON le.process_id = p.id
-      WHERE log_search MATCH ?
+      WHERE (le.message, le.raw_output, p.name) IN (${ftsResults
+        .map(() => "(?, ?, ?)")
+        .join(", ")})
     `;
 
-    const params: any[] = [query];
-
-    if (processName) {
-      sql += " AND p.name = ?";
-      params.push(processName);
-    }
+    const params: any[] = [];
+    ftsResults.forEach((result) => {
+      params.push(result.message, result.raw_output, result.process_name);
+    });
 
     if (level) {
       sql += " AND le.level = ?";
@@ -460,6 +518,119 @@ export class LogDatabase {
       ORDER BY project
     `);
     return stmt.all().map((row: any) => row.project);
+  }
+
+  // Log pruning functionality
+  pruneOldLogs(maxAgeHours: number): {
+    deletedLogs: number;
+    deletedProcesses: number;
+  } {
+    const cutoffTime = new Date(
+      Date.now() - maxAgeHours * 60 * 60 * 1000,
+    ).toISOString();
+
+    // Start a transaction to ensure consistency
+    const transaction = this.db.transaction(() => {
+      // First, count what we're about to delete
+      const logsToDeleteCount = this.db
+        .prepare(
+          `
+        SELECT COUNT(*) as count FROM log_entries
+        WHERE timestamp < ?
+      `,
+        )
+        .get(cutoffTime) as { count: number };
+
+      // Delete old log entries and handle FTS cleanup manually
+      // Clear FTS index and rebuild it after deletion (simpler than selective cleanup)
+      this.db.exec("DELETE FROM log_search");
+
+      const deleteLogsStmt = this.db.prepare(`
+        DELETE FROM log_entries
+        WHERE timestamp < ?
+      `);
+      deleteLogsStmt.run(cutoffTime);
+
+      // Rebuild FTS index with remaining entries
+      this.rebuildFTSIndex();
+
+      // Find processes that no longer have any log entries
+      const orphanedProcessesStmt = this.db.prepare(`
+        SELECT p.id FROM processes p
+        LEFT JOIN log_entries le ON p.id = le.process_id
+        WHERE le.process_id IS NULL
+      `);
+      const orphanedProcesses = orphanedProcessesStmt.all() as { id: number }[];
+
+      // Delete orphaned processes
+      const deleteProcessStmt = this.db.prepare(`
+        DELETE FROM processes
+        WHERE id = ?
+      `);
+      orphanedProcesses.forEach((process) => {
+        deleteProcessStmt.run(process.id);
+      });
+
+      return {
+        deletedLogs: logsToDeleteCount.count,
+        deletedProcesses: orphanedProcesses.length,
+      };
+    });
+
+    return transaction();
+  }
+
+  getOldestLogTimestamp(): string | null {
+    const stmt = this.db.prepare(`
+      SELECT MIN(timestamp) as oldest FROM log_entries
+    `);
+    const result = stmt.get() as { oldest: string | null };
+    return result.oldest;
+  }
+
+  getLogStatistics(): {
+    totalLogs: number;
+    totalProcesses: number;
+    oldestLog: string | null;
+    newestLog: string | null;
+    diskUsageKB: number;
+  } {
+    const logCountStmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM log_entries`,
+    );
+    const processCountStmt = this.db.prepare(
+      `SELECT COUNT(*) as count FROM processes`,
+    );
+    const oldestLogStmt = this.db.prepare(
+      `SELECT MIN(timestamp) as oldest FROM log_entries`,
+    );
+    const newestLogStmt = this.db.prepare(
+      `SELECT MAX(timestamp) as newest FROM log_entries`,
+    );
+
+    const logCount = logCountStmt.get() as { count: number };
+    const processCount = processCountStmt.get() as { count: number };
+    const oldestLog = oldestLogStmt.get() as { oldest: string | null };
+    const newestLog = newestLogStmt.get() as { newest: string | null };
+
+    // Get database file size in KB
+    const dbStats = this.db.prepare("PRAGMA page_count").get() as {
+      page_count?: number;
+    };
+    const pageSize = this.db.prepare("PRAGMA page_size").get() as {
+      page_size?: number;
+    };
+    const diskUsageKB = Math.round(
+      ((dbStats.page_count || 0) * (pageSize.page_size || 0)) / 1024,
+    );
+
+    return {
+      totalLogs: logCount.count,
+      totalProcesses: processCount.count,
+      oldestLog: oldestLog.oldest,
+      newestLog: newestLog.newest,
+      diskUsageKB,
+    };
   }
 
   close() {

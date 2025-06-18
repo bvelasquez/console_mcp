@@ -132,6 +132,30 @@ class ConsoleLogger {
       path.join(os.homedir(), ".console-logs");
 
     this.db = new LogDatabase(defaultLogDir);
+
+    // Auto-prune old logs if configured
+    this.performAutoPruning();
+  }
+
+  private performAutoPruning(): void {
+    const maxAgeHours = process.env.CONSOLE_LOG_MAX_AGE_HOURS;
+    // Default to 2 weeks (336 hours) if not specified
+    const ageHours =
+      maxAgeHours && !isNaN(Number(maxAgeHours)) ? Number(maxAgeHours) : 336;
+
+    try {
+      const result = this.db.pruneOldLogs(ageHours);
+      if (result.deletedLogs > 0 || result.deletedProcesses > 0) {
+        const sourceMsg = maxAgeHours
+          ? `configured ${ageHours}h`
+          : `default ${ageHours}h (2 weeks)`;
+        console.log(
+          `📝 Auto-pruned ${result.deletedLogs} old log entries and ${result.deletedProcesses} orphaned processes (older than ${sourceMsg})`,
+        );
+      }
+    } catch (error) {
+      console.warn(`⚠️  Failed to auto-prune logs: ${error}`);
+    }
   }
 
   // Properly reconstruct command string, preserving quotes for complex arguments
@@ -536,6 +560,7 @@ Examples:
 
 Environment Variables:
   CONSOLE_LOG_DIR - Directory to store log database (default: ~/.console-logs)
+  CONSOLE_LOG_MAX_AGE_HOURS - Auto-prune logs older than this many hours (default: 336 = 2 weeks)
 
 The logger will:
 1. Auto-detect complex commands that need shell execution (&&, ||, ;, eval, $(), etc.)
@@ -543,6 +568,7 @@ The logger will:
 3. Simultaneously log all output to a SQLite database
 4. Each log entry includes timestamp, level, source (stdout/stderr), and metadata
 5. The MCP server can then search and analyze these logs with fast SQL queries
+6. Auto-prune old logs (default: 2 weeks, override with CONSOLE_LOG_MAX_AGE_HOURS)
 
 Note: For complex commands with shell operators, wrap the entire command in quotes.
 `);
