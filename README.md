@@ -169,6 +169,84 @@ ls ~/.console-logs/
 console-mcp
 ```
 
+## 🔄 Updating
+
+### Updating Global Installation
+
+If you have the Console MCP installed globally and want to update to the latest version:
+
+```bash
+# Navigate to your Console MCP directory
+cd /path/to/console_mcp
+
+# Pull latest changes (if using git)
+git pull
+
+# Update global installation
+npm run update-global
+```
+
+Or use the full command:
+```bash
+cd /path/to/console_mcp
+npm install && npm run build && npm install -g .
+```
+
+### Quick Update Script
+
+You can also use the convenience script added to package.json:
+
+```bash
+# Either of these will work:
+npm run install-global
+npm run update-global
+```
+
+Both scripts do the same thing: build the project and install it globally.
+
+### Verifying the Update
+
+After updating, verify the new version is active:
+
+```bash
+# Check for new features in help
+console-logger --help
+
+# Test with a complex command (new shell mode feature)
+console-logger "test-update" "echo 'step1' && echo 'step2'"
+
+# Should show: 🐚 Using shell mode for complex command
+```
+
+### Automatic Update Detection
+
+The console-logger includes automatic update detection that warns when a newer version is available:
+
+```
+⚠️  UPDATE AVAILABLE!
+┌─────────────────────────────────────────────────┐
+│ 🔄 A newer version of console-logger is available │
+├─────────────────────────────────────────────────┤
+│ Current: 6/18/2025, 6:55:00 PM            │
+│ Latest:  6/18/2025, 6:59:00 PM            │
+├─────────────────────────────────────────────────┤
+│ To update:                                      │
+│   cd /Users/username/projects/console_mcp       │
+│   npm run update-global                         │
+└─────────────────────────────────────────────────┘
+```
+
+**How it works:**
+- Compares build timestamps between your global installation and local project
+- Only shows warnings when genuinely outdated (not during development)
+- Provides clear update instructions
+- Never blocks operation - warnings are informational only
+
+**Update detection triggers when:**
+- You have a global installation that's older than your local build
+- You're working on console_mcp improvements and haven't updated globally
+- Someone else updated the project and you need to pull + update
+
 ### Dependencies
 - `better-sqlite3` - High-performance SQLite3 bindings
 - `@modelcontextprotocol/sdk` - MCP protocol implementation
@@ -178,6 +256,7 @@ console-mcp
 ### 1. Start Console Logger
 Wrap any command to capture its output to the SQLite database:
 
+#### Simple Commands
 ```bash
 # Start a web server with logging
 console-logger "my-server" npm start
@@ -194,6 +273,35 @@ console-logger "docker-container" docker logs -f container-name
 # Any command with arguments
 console-logger "my-process" command arg1 arg2
 ```
+
+#### Complex Commands with Shell Operators
+The console-logger automatically detects and supports complex shell commands:
+
+```bash
+# Deployment pipeline with multiple steps
+console-logger "deploy" "cd ios && eval \"$(rbenv init -)\" && bundle install && bundle exec fastlane ios testflightdeploy"
+
+# Build and test pipeline
+console-logger "ci-pipeline" "npm run build && npm test && echo 'All tests passed!'"
+
+# Environment setup and server start
+console-logger "prod-server" "export NODE_ENV=production && node server.js"
+
+# Directory navigation with operations
+console-logger "file-ops" "cd src && find . -name '*.js' | head -10 && echo 'File listing complete'"
+
+# Using pipes and redirects
+console-logger "log-analysis" "tail -f app.log | grep ERROR | head -20"
+
+# Conditional operations
+console-logger "conditional" "test -f config.json && echo 'Config exists' || echo 'Config missing'"
+```
+
+**Shell Mode Features:**
+- 🐚 **Auto-detection**: Automatically detects shell operators (`&&`, `||`, `;`, `|`, `eval`, `cd`, etc.)
+- 🔄 **Environment preservation**: Maintains all environment variables and shell features
+- 📝 **Full logging**: Captures output from all commands in the pipeline
+- ⚡ **Efficient**: Simple commands still use direct execution for better performance
 
 ### Help and Options
 

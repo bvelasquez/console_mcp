@@ -9,9 +9,12 @@
     "console-mcp": "./build/index.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x build/index.js build/logger.js",
+    "build": "node scripts/build.js",
+    "build:simple": "tsc && chmod +x build/index.js build/logger.js",
     "start": "npm run build && node build/index.js",
     "logger": "npm run build && node build/logger.js",
+    "install-global": "npm run build && npm install -g .",
+    "update-global": "npm run build && npm install -g .",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
